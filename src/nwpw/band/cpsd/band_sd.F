@@ -326,7 +326,8 @@ c      call center_mass(gx,gy,gz)
          spin_orbit = .false.
       end if
       nbrillioun = brillioun_nbrillioun()
-      call Pneb_init(ispin,ne,nbrillioun,spin_orbit)
+      mapping1d = control_mapping1d()
+      call Pneb_init(ispin,ne,nbrillioun,mapping1d,spin_orbit)
       call Pneb_neq(neq)
 
 
@@ -337,7 +338,6 @@ c      call center_mass(gx,gy,gz)
       else
          fractional = .false.
       end if
-      mapping1d = control_mapping1d()
       ispinq  = Pneb_ispinq()
       nbrillq = Pneb_nbrillq()
 
@@ -432,6 +432,17 @@ c     **** allocate other variables ****
 
 *     **** Ortho Check ****
       call Pneb_orthoCheckMake_tag(.true.,0,0,npack1,psi2_tag)
+
+
+*     **** initialize two-electron Gaussian integrals ****
+*     **** initialize paw ncmp*Vloc ****
+c      if (cpsp_pawexist()) then
+c         call nwpw_gintegrals_init()
+c         call nwpw_gintegrals_set(control_move())
+c         call psp_dE_ncmp_vloc_Qlm(ispin,.false.,hunita)
+c      end if
+
+
 
 *     **** initialize SIC and HFX  ****
 c      call pspw_init_SIC(rtdb,ne)
@@ -989,6 +1000,7 @@ c
       call C3dB_pfft_end()
       call cpsi_data_end()
       call C3dB_end(1)
+      call Pneb_end()
       !if ((control_gga().ge.10).and.(control_gga().le.200)) then
       if (.not.control_only_lda()) then
          call mask_end()

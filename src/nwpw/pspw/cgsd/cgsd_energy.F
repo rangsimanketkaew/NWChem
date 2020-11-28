@@ -72,6 +72,10 @@ c#include "global.fh"
       external ion_hess_energy
       real*8   psi_1energy,control_gas_energy
       external psi_1energy,control_gas_energy
+      logical  pspw_V_APC_on
+      external pspw_V_APC_on
+      logical  control_use_fractional_rho,psi_try_read_density
+      external control_use_fractional_rho,psi_try_read_density
 
       !**** hack for implementing hessian energy model ****
       if (control_hess_model()) then
@@ -139,15 +143,18 @@ c#include "global.fh"
       if ((newpsi).or.(nwpw_cosmo_firsttime())) then
          call pspw_Lin_HFX_reset()
          call sdminimize(15)
+         call bybminimize0()
          if (control_fractional()) then
             call psi_1toelectron()
             call psi_1gen_hml()
             call psi_diagonalize_hml_assending()
             call psi_1rotate2()
             call psi_2to1()
-            call psi_1define_occupation(-1.0d0,.false.)
+            !call psi_1define_occupation(-1.0d0,.false.)
+            call psi_1define_occupation(1.0d0,.false.)
          end if
       end if
+
    2  continue
          icount = icount + 1
          if (stalled) then
@@ -204,7 +211,21 @@ c          **** reset minimizer if failed ****
 
          else if (minimizer.eq.8) then
            bfgscount = bfgscount + 1
-           call bybminimize2(E,deltae,deltac,bfgscount,.false.,1,failed)
+           value = .false.
+           if (control_fractional()) then
+              if (control_use_fractional_rho()) then
+                 value = psi_try_read_density(2)
+              end if
+           end if
+!$OMP PARALLEL 
+           call bybminimize2(E,deltae,deltac,
+     >                       bfgscount,.false.,1,value,failed)
+!$OMP END PARALLEL 
+           if (control_fractional()) then
+              if (control_use_fractional_rho()) then
+                 call psi_write_density(1)
+              end if
+           end if
 
 c          **** reset minimizer if failed ****
            if (failed) then
@@ -344,6 +365,10 @@ c          **** reset minimizer if failed ****
             write(luout,1322) en1(1),en1(psi_ispin()),' (real space)'
             write(luout,1323) en2(1),en2(psi_ispin()),' (real space)'
          end if
+
+*       **** write APC potential and charges ***
+        if (pspw_V_APC_on()) call pspw_shortprint_APC(luout)
+
          write(luout,1430) E(1),E(1)/ion_nion()
 
 
@@ -382,6 +407,9 @@ c          **** reset minimizer if failed ****
          if (meta_found()) then
            write(luout,1459) E(31),E(31)/ion_nion()
          end if
+         if (pspw_V_APC_on()) then
+           write(luout,1505) E(22),E(22)/ion_nion()
+         end if
          write(luout,1470) E(5),E(5)/ion_nion()
          if (control_fractional()) write(luout,1471) E(28),E(28)/neall
 
@@ -411,6 +439,9 @@ c        end if
          end if
          if (meta_found()) then
            write(luout,1504) E(32),E(32)/neall
+         end if
+         if (pspw_V_APC_on()) then
+           write(luout,1506) E(23),E(23)/neall
          end if
 
          virial = (E(10)+E(9)+E(8)+E(7))/E(6)
@@ -717,6 +748,8 @@ c1410 FORMAT(10X,'=============  summary of results  =================')
      >        ' (',E15.5,'/electron)')
  1504 FORMAT( ' K.S. Metadynamics energy   :',E19.10,
      >        ' (',E15.5,'/ion)')
+ 1505 FORMAT( ' APC energy          :',E19.10,' (',E15.5,'/ion)')
+ 1506 FORMAT( ' K.S. V_APC energy   :',E19.10,' (',E15.5,'/ion)')
  1507 FORMAT(/' Fermi energy =',2(E18.7,' (',F8.3,'eV)'))
  1510 FORMAT(2(E18.7,' (',F8.3,'eV)'))
  1511 FORMAT(2(E18.7,' (',F8.3,'eV)  occ=',F5.3))

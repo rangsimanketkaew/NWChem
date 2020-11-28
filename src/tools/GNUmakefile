@@ -597,7 +597,7 @@ ifdef USE_GAGITHUB
 	GET_TOOLS=./get-tools-github
   ifdef USE_GA_RELEASE
     ifndef GA_RELEASE_NO
-      GA_RELEASE_NO=5.7.2
+      GA_RELEASE_NO=5.8
     endif
     GA_DIR=ga-$(GA_RELEASE_NO)
   else
@@ -726,6 +726,12 @@ clean:
 
 realclean:
 	@rm -rf $(BUILDDIR) $(INSTALLDIR)
+# remove all files that are not .o objects (eg lib*.a) from libga.a
+cleanlibga:
+	mkdir -p ob
+	cd ob && ar -x ../build/.libs/libga.a && rm -f ../build/.libs/libga.a && ar crv ../build/.libs/libga.a *.o && mkdir -p ../install/lib
+	cd ..
+	rm -rf ob
 
 
 #

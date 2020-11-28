@@ -1881,6 +1881,9 @@ c     if (np.gt.1) call D3dB_SumAll(sum)
 *     *					*
 *     ***********************************
 
+*     shared output variable:
+*     - sum
+*
       subroutine Pack_cc_dot(nb,A,B,sum)
       implicit none
       integer    nb
@@ -3655,6 +3658,35 @@ c     **** three derivatives ****
 
 
 
+
+*     ***********************************
+*     *                                 *
+*     *          Pack_t_dscal1          *
+*     *                                 *
+*     ***********************************
+
+      subroutine Pack_t_dsca1l(nb,alpha,A)
+      implicit none
+      integer    nb
+      real*8     alpha,A(*)
+
+
+*     **** common block for pack ****
+      integer nida(0:3),nidb(0:3)
+      integer pack(2,0:3)
+      common / pack_blk / pack,nida,nidb
+
+*     **** local variables ****
+      integer i
+
+!$OMP DO
+      do i=1,(nida(nb)+nidb(nb))
+       A(i) = alpha*A(i)
+      end do
+!$OMP END DO
+
+      return
+      end
 
 
 *     ***********************************

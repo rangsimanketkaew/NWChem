@@ -218,11 +218,29 @@ endif
 # other NWChem modules
 ifdef BUILD_OPENBLAS
 NW_CORE_SUBDIRS += libext
+#bail out if BLASOPT or LAPACK_LIB or BLAS_LIB are defined by user
+ifneq ($(or $(BLASOPT),$(LAPACK_LIB),$(BLAS_LIB)),)
+$(info     )
+$(info You must unset)
+$(info BLASOPT ,LAPACK_LIB and BLAS_LIB)
+$(info when using BUILD_OPENBLAS )
+$(info )
+$(error )
+endif
       BLASOPT=-L$(NWCHEM_TOP)/src/libext/lib -lnwc_openblas
       LAPACK_LIB=$(BLASOPT)      
+      BLAS_LIB=$(BLASOPT)
 endif      
 ifdef BUILD_SCALAPACK
 NW_CORE_SUBDIRS += libext
+      ifneq ($(or $(SCALAPACK),$(SCALAPACK_LIB)),)
+$(info     )
+$(info You must unset)
+$(info SCALAPACK  and SCALAPACK_LIB)
+$(info when using BUILD_SCALAPACK )
+$(info )
+$(error )
+endif
       SCALAPACK=-L$(NWCHEM_TOP)/src/libext/lib -lnwc_scalapack
 endif      
 ifdef BUILD_MPICH
@@ -2003,7 +2021,8 @@ endif
        FOPTIMIZE = -O3  -unroll
        FOPTIMIZE += -ip
        FOPTIONS += -align -fpp
-           CPP=fpp -P 
+# might be not need and the root cause for https://github.com/nwchemgit/nwchem/issues/255
+#           CPP=fpp -P
            ifeq ($(_IFCV15ORNEWER), Y)
 # fpp seems to get lost with ifort 15 in the offload bit
 # only use EXPLICITF for offload because otherwise we want debugging to be easy
@@ -2241,7 +2260,12 @@ endif
              endif
         endif
 
-        FDEBUG += -g -O 
+        ifeq ($(FC),flang)
+#AOMP flang crashes with -g in source using block data
+        FDEBUG =  -O
+	  else
+        FDEBUG += -g -O
+	endif
         ifdef USE_F2C
 #possible segv with use of zdotc (e.g. with GOTO BLAS)
 #http://gcc.gnu.org/bugzilla/show_bug.cgi?id=20178
@@ -2280,6 +2304,13 @@ ifeq ($(_CPU),$(findstring $(_CPU),aarch64))
 
   ifeq ($(_CC),gcc)
     COPTIONS   +=   -O3 -funroll-loops -ffast-math 
+    ifdef USE_OPENMP
+      COPTIONS += -fopenmp
+    endif
+  endif
+
+  ifeq ($(_CC),armclang)
+    COPTIONS += -O3 -funroll-loops -mcpu=native -armpl
     ifdef USE_OPENMP
       COPTIONS += -fopenmp
     endif
@@ -2327,13 +2358,13 @@ ifeq ($(_CPU),$(findstring $(_CPU),aarch64))
 
     DEFINES   +=   -DARMFLANG
     LINK.f = $(FC)  $(LDFLAGS) 
-    FOPTIMIZE  = -O3 -Mfma -ffp-contract=fast
+    FOPTIMIZE  = -O3 -Mfma -ffp-contract=fast -fno-backslash
     ifeq ($(V),1)
     $(info     ARMFLANG FOPTIMIZE = ${FOPTIMIZE})
     endif
 
     FDEBUG += -g -O 
-    FOPTIMIZE +=  -mtune=native
+    FOPTIMIZE +=  -mtune=native -armpl
 
     ifndef USE_FPE
       FOPTIMIZE  += -ffast-math #2nd time
@@ -2599,12 +2630,12 @@ else
   GOTPYTHON2 := $(shell command -v python2 2> /dev/null)
   GOTPYTHON  := $(shell command -v python 2> /dev/null)
   ifdef GOTPYTHON3
-    PYTHONVERSION=$(shell python3 -V 2>&1 |cut -c 8-10)
+    PYTHONVERSION=$(shell python3 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
   else ifdef GOTPYTHON2
-    PYTHONVERSION=$(shell python2 -V 2>&1 |cut -c 8-10)
+    PYTHONVERSION=$(shell python2 -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
   else ifdef GOTPYTHON
 #last try at python2
-    PYTHONVERSION=$(shell python -V 2>&1 |cut -c 8-10)
+    PYTHONVERSION=$(shell python -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
   else
 errorpython3:
 $(info )

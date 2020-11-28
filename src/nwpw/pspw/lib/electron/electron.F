@@ -92,12 +92,20 @@ c      paw_exist = psp_pawexist()
      >                     'xce',xce(2),xce(1))
       if (.not. value) 
      >  call errquit('electron_init: out of heap memory',0, MA_ERR)
-      call dcopy(n2ft3d*(neq(1)+neq(2)),0.0d0,0,dbl_mb(psi_r(1)),1)
-      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(vall(1)),1)
-      call dcopy(n2ft3d,0.0d0,0,dbl_mb(v_field(1)),1)
-      call dcopy(n2ft3d,0.0d0,0,dbl_mb(vl_lr(1)),1)
-      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(xcp(1)),1)
-      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(xce(1)),1)
+c      call dcopy(n2ft3d*(neq(1)+neq(2)),0.0d0,0,dbl_mb(psi_r(1)),1)
+c      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(vall(1)),1)
+c      call dcopy(n2ft3d,0.0d0,0,dbl_mb(v_field(1)),1)
+c      call dcopy(n2ft3d,0.0d0,0,dbl_mb(vl_lr(1)),1)
+c      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(xcp(1)),1)
+c      call dcopy(2*n2ft3d,0.0d0,0,dbl_mb(xce(1)),1)
+      call Parallel_shared_vector_zero(.false.,(neq(1)+neq(2))*n2ft3d,
+     >                                 dbl_mb(psi_r(1)))
+      call Parallel_shared_vector_zero(.false.,2*n2ft3d,dbl_mb(vall(1)))
+      call Parallel_shared_vector_zero(.false.,n2ft3d,
+     >                                 dbl_mb(v_field(1)))
+      call Parallel_shared_vector_zero(.false.,n2ft3d,dbl_mb(vl_lr(1)))
+      call Parallel_shared_vector_zero(.false.,2*n2ft3d,dbl_mb(xcp(1)))
+      call Parallel_shared_vector_zero(.true.,2*n2ft3d,dbl_mb(xce(1)))
 
 *     *** initializer symmetrizer ***
       call rho_symmetrizer_init()
@@ -164,6 +172,31 @@ c      paw_exist = psp_pawexist()
       electron_count = counter
       return
       end
+
+
+*     ***********************************
+*     *                                 *
+*     *         electron_run0           *
+*     *                                 *
+*     ***********************************
+      subroutine electron_run0(psi_k)
+      implicit none
+      complex*16 psi_k(*)
+     
+*     **** electron_counter common block ****
+      integer counter
+      common / electron_counter / counter
+     
+!$OMP MASTER                  
+      counter = counter+1     
+!$OMP END MASTER
+      
+      call electron_gen_psi_r(psi_k)
+      call electron_gen_Hvallpsi_k(psi_k)
+
+      return
+      end
+
 
 
 *     ***********************************
@@ -364,6 +397,8 @@ c      end
       external nwpw_meta_gga_pxc,psp_kinetic_core,psp_ion_core
       external psp_hartree_atom,psp_hartree_cmp_cmp
       external psp_hartree_cmp_pw
+      logical  pspw_V_APC_on
+      external pspw_V_APC_on
       
       call D3dB_nx(1,nx)
       call D3dB_ny(1,ny)
@@ -512,9 +547,70 @@ c     >                + eke_core + eion_core
          total_energy = total_energy + emeta - pmeta
       end if
 
+*     **** APC energy ****
+      if (pspw_V_APC_on()) then
+         call pspw_E_APC(eapc,papc)
+         total_energy = total_energy + eapc - papc
+      end if
+
 
 *     **** total energy ****
       electron_energy = total_energy
+
+      return
+      end
+
+*     ***********************************
+*     *					*
+*     *		electron_energy0	*
+*     *					*
+*     ***********************************
+      real*8 function electron_energy0(psi_k)
+      implicit none
+      complex*16 psi_k(*)
+
+#include "bafdecls.fh"
+#include "electron_common.fh"
+
+
+*     **** local variables ****
+      integer ii,ms,n1(2),n2(2)
+      real*8  eorbit,total_energy
+
+      real*8 e1,e2
+      common /eenergy_tmp_common/ e1,e2
+
+      n1(1) = 1
+      n1(2) = neq(1) + 1
+      n2(1) = neq(1)
+      n2(2) = neq(1) + neq(2)
+
+*     *** get orbital energies ****
+!$OMP MASTER
+      e1 = 0.0d0
+      e2 = 0.0d0
+!$OMP END MASTER
+!$OMP BARRIER
+      !eorbit = 0.0d0
+      do ms=1,ispin
+      do ii=n1(ms),n2(ms)
+        call Pack_cc_idot(1,psi_k(1+(ii-1)*npack1),
+     >                    dcpl_mb(Hpsi_k(1)+(ii-1)*npack1),
+     >                    e1)
+!$OMP MASTER
+        e2 = e2 + e1
+!$OMP END MASTER
+      end do
+      end do
+!$OMP BARRIER
+      call Parallel_SumAll(e2)
+      eorbit = e2
+      if (ispin.eq.1) eorbit = eorbit+eorbit
+
+      total_energy = eorbit !*** add other energies here ? ***
+
+*     **** total energy ****
+      electron_energy0 = total_energy
 
       return
       end
@@ -871,6 +967,36 @@ c     >                + eke_core + eion_core
 
 
 *     ***********************************
+*     *                                 *
+*     *         electron_psi_r_ptr      *
+*     *                                 *
+*     ***********************************
+      integer function electron_psi_r_ptr()
+      implicit none
+
+#include "electron_common.fh"
+
+      electron_psi_r_ptr = psi_r(1)
+      return
+      end
+
+*     ***********************************
+*     *                                 *
+*     *         electron_Hpsi_k_ptr      *
+*     *                                 *
+*     ***********************************
+      integer function electron_Hpsi_k_ptr()
+      implicit none
+
+#include "electron_common.fh"
+
+      electron_Hpsi_k_ptr = Hpsi_k(1)
+      return
+      end
+
+
+
+*     ***********************************
 *     *					*
 *     *	    electron_SIC_energies	*
 *     *					*
@@ -1005,14 +1131,30 @@ c     >                + eke_core + eion_core
 #include "bafdecls.fh"
 #include "electron_common.fh"
 
-
       emeta0 = emeta
       pmeta0 = pmeta
       return
       end
 
 
- 
+*     ***********************************
+*     *                                 *
+*     *      electron_apc_energies      *
+*     *                                 *
+*     ***********************************
+
+      subroutine electron_apc_energies(eapc0,papc0)
+      implicit none
+      real*8 eapc0,papc0
+
+#include "bafdecls.fh"
+#include "electron_common.fh"
+
+      eapc0 = eapc
+      papc0 = papc
+      return
+      end
+
 
 *     ***********************************
 *     *					*
@@ -1026,10 +1168,13 @@ c     >                + eke_core + eion_core
 #include "bafdecls.fh"
 #include "electron_common.fh"
 
-
-      call dcopy(2*npack1*(neq(1)+neq(2)),
-     >           dcpl_mb(Hpsi_k(1)),1,
-     >           Hpsi_k_new,1)
+c      call dcopy(2*npack1*(neq(1)+neq(2)),
+c     >           dcpl_mb(Hpsi_k(1)),1,
+c     >           Hpsi_k_new,1)
+      call Parallel_shared_vector_copy(.true.,
+     >             2*npack1*(neq(1)+neq(2)),
+     >             dcpl_mb(Hpsi_k(1)),
+     >             Hpsi_k_new)
       return
       end
 
@@ -1166,9 +1311,13 @@ c      end do
 #include "electron_common.fh"
 
 
-      call dcopy(2*npack1*(neq(1)+neq(2)),
-     >           dcpl_mb(Hpsi_k(1)),1,
-     >           THpsi_k,1)      
+c      call dcopy(2*npack1*(neq(1)+neq(2)),
+c     >           dcpl_mb(Hpsi_k(1)),1,
+c     >           THpsi_k,1)      
+      call Parallel_shared_vector_copy(.true.,
+     >             2*npack1*(neq(1)+neq(2)),
+     >             dcpl_mb(Hpsi_k(1)),
+     >             THpsi_k)      
       return
       end
 
@@ -1213,7 +1362,7 @@ c      end do
 *     ***** local variables ****
       logical value
       integer ms,n,n1(2),shift,mhml(2)
-     
+
 
       n1(1) = 1
       n1(2) = ne(1)+1
@@ -1228,10 +1377,10 @@ c      end do
       call Grsm_gg_Copy(npack1,(neq(1)+neq(2)),
      >                  dcpl_mb(Hpsi_k(1)),
      >                  THpsi_k)
+
       call ke_Precondition(npack1,(neq(1)+neq(2)),
      >                  psi_k,
      >                  THpsi_k)
-
 
 *     **** generate mhml = <psi|M*H|psi> ****
       do ms=1,ispin
@@ -1508,6 +1657,54 @@ cccc#include "frac_occ.fh"
 
       return
       end
+
+
+*     ***********************************
+*     *                                 *
+*     *     electron_gen_Hvallpsi_k     *
+*     *                                 *
+*     ***********************************
+
+      subroutine electron_gen_Hvallpsi_k(psi_k)
+      implicit none
+      complex*16 psi_k(*)
+
+#include "bafdecls.fh"
+#include "electron_common.fh"
+
+
+*     **** local variables ****
+      logical move,fractional
+      integer n
+      real*8  fion(3,1)
+
+*     **** external functions ****
+      integer  control_version
+      external control_version
+
+      move = .false.
+      fractional = .false.
+*     ******************
+*     **** get Hpsi ****
+*     ******************
+      if (control_version().eq.3)
+     >  call psi_H_vall(ispin,neq,psi_k,
+     >             dbl_mb(psi_r(1)),
+     >             dbl_mb(vall(1)),
+     >             dcpl_mb(Hpsi_k(1)))
+
+      if (control_version().eq.4)
+     >  call psi_Hv4_vall(ispin,neq,psi_k,
+     >             dbl_mb(psi_r(1)),
+     >             dbl_mb(vall(1)),
+     >             dcpl_mb(Hpsi_k(1)))
+
+      call Grsm_gg_dScale1(npack1,(neq(1)+neq(2)),(-1.0d0),
+     >                     dcpl_mb(Hpsi_k(1)))
+
+      return
+      end
+
 
 
 
@@ -1806,7 +2003,8 @@ cccc#include "frac_occ.fh"
 *     *********************
 *     **** generate dn ****
 *     *********************
-      call dcopy(2*n2ft3d,0.0d0,0,dn,1)
+c      call dcopy(2*n2ft3d,0.0d0,0,dn,1)
+      call Parallel_shared_vector_zero(.true.,2*n2ft3d,dn)
       if (fractional) then
       do ms=1,ispin
          do n=n1(ms),n2(ms)
@@ -2168,6 +2366,9 @@ c      end do
      >     call D3dB_rr_Sum2(1,dbl_mb(v_confine(1)),dbl_mb(vall(1)))
 
       end if
+      if (ispin.eq.2) then
+         call D3dB_r_Copy(1,dbl_mb(vall(1)),dbl_mb(vall(1)+2*nfft3d))
+      end if
 
       return 
       end 
@@ -2237,7 +2438,9 @@ c     >                     dbl_mb( vall(1)+(ms-1)*n2ft3d))
 #include "bafdecls.fh"
 #include "electron_common.fh"
 
-      call dcopy(4*nfft3d,dbl_mb(vall(1)),1,vall_out,1)
+      !call dcopy(4*nfft3d,dbl_mb(vall(1)),1,vall_out,1)
+      call Parallel_shared_vector_copy(.true.,
+     >             4*nfft3d,dbl_mb(vall(1)),vall_out)
       return
       end
 
@@ -2255,7 +2458,9 @@ c     >                     dbl_mb( vall(1)+(ms-1)*n2ft3d))
 #include "bafdecls.fh"
 #include "electron_common.fh"
 
-      call dcopy(4*nfft3d,vall_in,1,dbl_mb(vall(1)),1)
+      !call dcopy(4*nfft3d,vall_in,1,dbl_mb(vall(1)),1)
+      call Parallel_shared_vector_copy(.true.,
+     >             4*nfft3d,vall_in,dbl_mb(vall(1)))
       return
       end
 
@@ -2288,8 +2493,8 @@ c     >                     dbl_mb( vall(1)+(ms-1)*n2ft3d))
       external control_gga,control_version
       real*8   control_attenuation
       external control_attenuation
-      logical  nwpw_cosmo1_on,nwpw_cosmo2_on
-      external nwpw_cosmo1_on,nwpw_cosmo2_on
+      logical  nwpw_cosmo1_on,nwpw_cosmo2_on,pspw_V_APC_on
+      external nwpw_cosmo1_on,nwpw_cosmo2_on,pspw_V_APC_on
 
       n2ft3d = 2*nfft3d
       gga = control_gga()
@@ -2322,9 +2527,10 @@ c     >                     dbl_mb( vall(1)+(ms-1)*n2ft3d))
      >         call errquit("electron_gen_scf_potentials:pop stack",
      >                      1,MA_ERR)
          end if
-         if (nwpw_cosmo2_on()) then
+
+         if (pspw_V_APC_on()) then
             call electron_gen_vl_potential()
-            call pspw_cosmo_V_APC(ispin,ne,dng,dcpl_mb(vl(1)))
+            call pspw_V_APC(ispin,ne,dng,dcpl_mb(vl(1)),eapc,papc)
          end if
 
          value = BA_pop_stack(tmp1(2)) 
@@ -2721,7 +2927,7 @@ c     &       MA_ERR)
 c
 c      electron_psi_vnl_ave = enlocal
 
-      electron_psi_vnl_ave = E_Vnonlocal(ispin,neq,fractional,occ)
+      electron_psi_vnl_ave = E_vnonlocal(ispin,neq,fractional,occ)
       return
       end
 
